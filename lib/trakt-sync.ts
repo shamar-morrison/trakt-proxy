@@ -63,11 +63,7 @@ export async function syncTraktData(
     // 1. Sync watched movies to already-watched
     try {
       const watchedMovies = await getWatchedMovies(accessToken);
-      itemsSynced.movies = await syncAlreadyWatched(
-        userId,
-        watchedMovies,
-        "movies",
-      );
+      itemsSynced.movies = await syncAlreadyWatched(userId, watchedMovies);
     } catch (error) {
       const errorMsg = `Failed to sync watched movies: ${error}`;
       console.error(errorMsg);
@@ -165,7 +161,6 @@ export async function syncTraktData(
 async function syncAlreadyWatched(
   userId: string,
   traktMovies: Awaited<ReturnType<typeof getWatchedMovies>>,
-  type: "movies",
 ): Promise<number> {
   const items: Record<string, any> = {};
   let count = 0;

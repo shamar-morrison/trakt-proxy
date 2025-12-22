@@ -6,11 +6,7 @@ import {
   TraktListItem,
   TraktWatchlistItem,
   TraktFavorite,
-  FirestoreWatchlistItem,
-  FirestoreRating,
   FirestoreListItem,
-  FirestoreFavorite,
-  FirestoreEpisodeTracking,
 } from "@/utils/types/trakt";
 
 /**
