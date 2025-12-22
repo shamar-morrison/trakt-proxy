@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase-admin";
 import { Timestamp } from "firebase-admin/firestore";
 
+// Force dynamic rendering - this route uses request.nextUrl.searchParams
+export const dynamic = "force-dynamic";
+
 /**
  * GET /api/trakt/callback
  * Handles OAuth callback from Trakt
