@@ -60,26 +60,64 @@ export async function syncTraktData(
     // Get user profile (needed for lists)
     const userProfile = await getUserProfile(accessToken);
 
-    // 1. Sync watched movies to already-watched
+    // Collect all already-watched items (movies + shows) before writing
+    const allAlreadyWatchedItems: Record<string, any> = {};
+
+    // 1. Sync watched movies and collect for already-watched
     try {
       const watchedMovies = await getWatchedMovies(accessToken);
-      itemsSynced.movies = await syncAlreadyWatched(userId, watchedMovies);
+      for (const traktMovie of watchedMovies) {
+        const item = transformWatchedMovie(traktMovie);
+        if (item) {
+          allAlreadyWatchedItems[`movie-${item.id}`] = item;
+          itemsSynced.movies++;
+        }
+      }
     } catch (error) {
       const errorMsg = `Failed to sync watched movies: ${error}`;
       console.error(errorMsg);
       errors.push(errorMsg);
     }
 
-    // 2. Sync watched shows to already-watched and episode tracking
+    // 2. Sync watched shows, episode tracking, and collect for already-watched
     try {
       const watchedShows = await getWatchedShows(accessToken);
-      const { shows, episodes } = await syncWatchedShows(userId, watchedShows);
+      const { shows, episodes, alreadyWatchedShows } = await syncWatchedShows(
+        userId,
+        watchedShows,
+      );
       itemsSynced.shows = shows;
       itemsSynced.episodes = episodes;
+
+      // Add shows to already-watched collection
+      Object.assign(allAlreadyWatchedItems, alreadyWatchedShows);
     } catch (error) {
       const errorMsg = `Failed to sync watched shows: ${error}`;
       console.error(errorMsg);
       errors.push(errorMsg);
+    }
+
+    // Write all already-watched items at once
+    if (Object.keys(allAlreadyWatchedItems).length > 0) {
+      const alreadyWatchedRef = db
+        .collection("users")
+        .doc(userId)
+        .collection("lists")
+        .doc("already-watched");
+
+      await alreadyWatchedRef.set(
+        {
+          id: "already-watched",
+          name: "Already Watched",
+          createdAt: Timestamp.now(),
+          items: allAlreadyWatchedItems,
+          metadata: {
+            lastUpdated: Timestamp.now(),
+            itemCount: Object.keys(allAlreadyWatchedItems).length,
+          },
+        },
+        { merge: true },
+      );
     }
 
     // 3. Sync ratings
@@ -156,54 +194,19 @@ export async function syncTraktData(
 }
 
 /**
- * Sync already watched items (movies or shows) to lists/already-watched
- */
-async function syncAlreadyWatched(
-  userId: string,
-  traktMovies: Awaited<ReturnType<typeof getWatchedMovies>>,
-): Promise<number> {
-  const items: Record<string, any> = {};
-  let count = 0;
-
-  for (const traktMovie of traktMovies) {
-    const item = transformWatchedMovie(traktMovie);
-    if (item) {
-      const itemKey = `movie-${item.id}`;
-      items[itemKey] = item;
-      count++;
-    }
-  }
-
-  if (count > 0) {
-    const alreadyWatchedRef = db
-      .collection("users")
-      .doc(userId)
-      .collection("lists")
-      .doc("already-watched");
-
-    await alreadyWatchedRef.set(
-      {
-        id: "already-watched",
-        name: "Already Watched",
-        createdAt: Timestamp.now(),
-        items,
-      },
-      { merge: true },
-    );
-  }
-
-  return count;
-}
-
-/**
  * Sync watched shows and episode tracking
+ * Returns already-watched items for consolidation with movies
  */
 async function syncWatchedShows(
   userId: string,
   traktShows: Awaited<ReturnType<typeof getWatchedShows>>,
-): Promise<{ shows: number; episodes: number }> {
+): Promise<{
+  shows: number;
+  episodes: number;
+  alreadyWatchedShows: Record<string, any>;
+}> {
   const episodeBatch = db.batch();
-  const alreadyWatchedItems: Record<string, any> = {};
+  const alreadyWatchedShows: Record<string, any> = {};
   let showCount = 0;
   let episodeCount = 0;
 
@@ -215,20 +218,18 @@ async function syncWatchedShows(
         .collection("users")
         .doc(userId)
         .collection("episode_tracking")
-        .doc(traktShow.show.ids.tmdb.toString()); // Use TMDB ID as doc ID
+        .doc(traktShow.show.ids.tmdb.toString());
 
       episodeBatch.set(episodeRef, episodeTracking, { merge: true });
 
-      // Count episodes
       episodeCount += Object.keys(episodeTracking.episodes).length;
       showCount++;
     }
 
-    // Add to already-watched list
+    // Collect for already-watched list
     const watchedShow = transformWatchedShow(traktShow);
     if (watchedShow) {
-      const itemKey = `tv-${watchedShow.id}`;
-      alreadyWatchedItems[itemKey] = watchedShow;
+      alreadyWatchedShows[`tv-${watchedShow.id}`] = watchedShow;
     }
   }
 
@@ -236,26 +237,7 @@ async function syncWatchedShows(
     await episodeBatch.commit();
   }
 
-  // Add shows to already-watched list
-  if (Object.keys(alreadyWatchedItems).length > 0) {
-    const alreadyWatchedRef = db
-      .collection("users")
-      .doc(userId)
-      .collection("lists")
-      .doc("already-watched");
-
-    await alreadyWatchedRef.set(
-      {
-        id: "already-watched",
-        name: "Already Watched",
-        createdAt: Timestamp.now(),
-        items: alreadyWatchedItems,
-      },
-      { merge: true },
-    );
-  }
-
-  return { shows: showCount, episodes: episodeCount };
+  return { shows: showCount, episodes: episodeCount, alreadyWatchedShows };
 }
 
 /**
