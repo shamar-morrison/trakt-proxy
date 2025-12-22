@@ -14,95 +14,94 @@ import {
 } from "@/utils/types/trakt";
 
 /**
- * Convert Trakt watched movie to Firestore watchlist item
+ * Convert Trakt watched show to episode tracking data
+ * Matches your flat episode structure: episodes.{season}_{episode}
  */
-export function transformWatchedMovie(
-  traktMovie: TraktWatchedMovie,
-): FirestoreWatchlistItem | null {
-  // Skip if no TMDB ID
+export function transformEpisodeTracking(traktShow: TraktWatchedShow) {
+  if (!traktShow.show.ids.tmdb) {
+    return null;
+  }
+
+  const episodes: Record<
+    string,
+    {
+      watched: boolean;
+      watchedAt: any;
+      episodeId?: number;
+      posterPath?: string;
+      episodeName?: string;
+      episodeAirDate?: string;
+    }
+  > = {};
+
+  traktShow.seasons.forEach((season) => {
+    season.episodes.forEach((episode) => {
+      const episodeKey = `${season.number}_${episode.number}`;
+      episodes[episodeKey] = {
+        watched: true,
+        watchedAt: Timestamp.fromDate(new Date(episode.last_watched_at)),
+      };
+    });
+  });
+
+  return {
+    episodes,
+    metadata: {
+      tvShowName: traktShow.show.title,
+      lastUpdated: Timestamp.now(),
+    },
+  };
+}
+
+/**
+ * Convert Trakt watched movie to already-watched item
+ */
+export function transformWatchedMovie(traktMovie: TraktWatchedMovie) {
   if (!traktMovie.movie.ids.tmdb) {
     console.warn(`Movie "${traktMovie.movie.title}" has no TMDB ID, skipping`);
     return null;
   }
 
   return {
-    tmdbId: traktMovie.movie.ids.tmdb,
-    mediaType: "movie",
-    status: "already_watched",
-    addedAt: Timestamp.fromDate(new Date(traktMovie.last_watched_at)),
-    lastWatchedAt: Timestamp.fromDate(new Date(traktMovie.last_watched_at)),
-    traktId: traktMovie.movie.ids.trakt,
-    traktPlays: traktMovie.plays,
+    id: traktMovie.movie.ids.tmdb,
+    media_type: "movie",
     title: traktMovie.movie.title,
-    releaseYear: traktMovie.movie.year,
+    release_date: traktMovie.movie.year
+      ? `${traktMovie.movie.year}-01-01`
+      : undefined,
+    addedAt: Timestamp.fromDate(new Date(traktMovie.last_watched_at)),
+    // TMDB fields to be enriched:
+    // poster_path, vote_average, genre_ids
   };
 }
 
 /**
- * Convert Trakt watched show to Firestore watchlist item
+ * Convert Trakt watched show to already-watched item
  */
-export function transformWatchedShow(
-  traktShow: TraktWatchedShow,
-): FirestoreWatchlistItem | null {
+export function transformWatchedShow(traktShow: TraktWatchedShow) {
   if (!traktShow.show.ids.tmdb) {
     console.warn(`Show "${traktShow.show.title}" has no TMDB ID, skipping`);
     return null;
   }
 
   return {
-    tmdbId: traktShow.show.ids.tmdb,
-    mediaType: "tv",
-    status: "already_watched",
+    id: traktShow.show.ids.tmdb,
+    media_type: "tv",
+    name: traktShow.show.title, // TV shows use 'name' field
+    first_air_date: traktShow.show.year
+      ? `${traktShow.show.year}-01-01`
+      : undefined,
     addedAt: Timestamp.fromDate(new Date(traktShow.last_watched_at)),
-    lastWatchedAt: Timestamp.fromDate(new Date(traktShow.last_watched_at)),
-    traktId: traktShow.show.ids.trakt,
-    traktPlays: traktShow.plays,
-    title: traktShow.show.title,
-    releaseYear: traktShow.show.year,
-  };
-}
-
-/**
- * Convert Trakt watched show to episode tracking data
- */
-export function transformEpisodeTracking(
-  traktShow: TraktWatchedShow,
-): FirestoreEpisodeTracking | null {
-  if (!traktShow.show.ids.tmdb) {
-    return null;
-  }
-
-  const seasons: FirestoreEpisodeTracking["seasons"] = {};
-
-  traktShow.seasons.forEach((season) => {
-    const seasonKey = season.number.toString();
-    seasons[seasonKey] = { episodes: {} };
-
-    season.episodes.forEach((episode) => {
-      const episodeKey = episode.number.toString();
-      seasons[seasonKey].episodes[episodeKey] = {
-        watched: true,
-        watchedAt: Timestamp.fromDate(new Date(episode.last_watched_at)),
-        traktPlays: episode.plays,
-      };
-    });
-  });
-
-  return {
-    showTmdbId: traktShow.show.ids.tmdb,
-    showTitle: traktShow.show.title,
-    traktShowId: traktShow.show.ids.trakt,
-    seasons,
+    // TMDB fields to be enriched:
+    // poster_path, vote_average, genre_ids
   };
 }
 
 /**
  * Convert Trakt rating to Firestore rating
- * Converts Trakt's 1-10 scale to your app's rating system
+ * Document ID format: {mediaType}-{tmdbId} (with hyphen)
  */
-export function transformRating(
-  traktRating: TraktRating,
-): FirestoreRating | null {
+export function transformRating(traktRating: TraktRating) {
   let tmdbId: number | undefined;
   let mediaType: "movie" | "tv";
   let title: string;
@@ -126,19 +125,17 @@ export function transformRating(
     return null;
   }
 
-  // Convert Trakt's 1-10 rating to your app's scale
-  // Adjust this conversion based on your app's rating system
-  // If you use 5 stars: rating / 2
-  // If you use 10 stars: keep as is
-  const convertedRating = traktRating.rating; // Assuming 10-star system
+  // Convert Trakt's 1-10 rating to 5-star system
+  const convertedRating = traktRating.rating / 2;
 
   return {
-    tmdbId,
-    mediaType,
+    id: `${mediaType}-${tmdbId}`, // Must match document ID
+    media_type: mediaType,
     rating: convertedRating,
     ratedAt: Timestamp.fromDate(new Date(traktRating.rated_at)),
-    traktId: traktRating.movie?.ids.trakt || traktRating.show?.ids.trakt,
     title,
+    // These fields should be fetched from TMDB if needed:
+    // posterPath, releaseDate
   };
 }
 
@@ -184,28 +181,28 @@ export function transformListItem(
 
 /**
  * Convert Trakt watchlist item to Firestore watchlist item
+ * These will be stored as items in lists/watchlist document
  */
-export function transformWatchlistItem(
-  traktItem: TraktWatchlistItem,
-): FirestoreWatchlistItem | null {
+export function transformWatchlistItem(traktItem: TraktWatchlistItem) {
   let tmdbId: number | undefined;
   let mediaType: "movie" | "tv";
   let title: string;
-  let releaseYear: number | undefined;
-  let traktId: number | undefined;
+  let releaseDate: string | undefined;
 
   if (traktItem.movie) {
     tmdbId = traktItem.movie.ids.tmdb;
     mediaType = "movie";
     title = traktItem.movie.title;
-    releaseYear = traktItem.movie.year;
-    traktId = traktItem.movie.ids.trakt;
+    releaseDate = traktItem.movie.year
+      ? `${traktItem.movie.year}-01-01`
+      : undefined;
   } else if (traktItem.show) {
     tmdbId = traktItem.show.ids.tmdb;
     mediaType = "tv";
     title = traktItem.show.title;
-    releaseYear = traktItem.show.year;
-    traktId = traktItem.show.ids.trakt;
+    releaseDate = traktItem.show.year
+      ? `${traktItem.show.year}-01-01`
+      : undefined;
   } else {
     return null;
   }
@@ -216,37 +213,33 @@ export function transformWatchlistItem(
   }
 
   return {
-    tmdbId,
-    mediaType,
-    status: "to_watch",
-    addedAt: Timestamp.fromDate(new Date(traktItem.listed_at)),
-    traktId,
+    id: tmdbId,
+    media_type: mediaType, // snake_case
     title,
-    releaseYear,
+    release_date: releaseDate,
+    addedAt: Timestamp.fromDate(new Date(traktItem.listed_at)),
+    // These fields should be fetched from TMDB:
+    // poster_path, vote_average, genre_ids
   };
 }
 
 /**
- * Convert Trakt favorite to Firestore favorite
+ * Convert Trakt favorite to Firestore favorite item
+ * These will be stored as items in lists/favorites document
  */
-export function transformFavorite(
-  traktFavorite: TraktFavorite,
-): FirestoreFavorite | null {
+export function transformFavorite(traktFavorite: TraktFavorite) {
   let tmdbId: number | undefined;
   let mediaType: "movie" | "tv";
   let title: string;
-  let traktId: number | undefined;
 
   if (traktFavorite.movie) {
     tmdbId = traktFavorite.movie.ids.tmdb;
     mediaType = "movie";
     title = traktFavorite.movie.title;
-    traktId = traktFavorite.movie.ids.trakt;
   } else if (traktFavorite.show) {
     tmdbId = traktFavorite.show.ids.tmdb;
     mediaType = "tv";
     title = traktFavorite.show.title;
-    traktId = traktFavorite.show.ids.trakt;
   } else {
     return null;
   }
@@ -257,10 +250,11 @@ export function transformFavorite(
   }
 
   return {
-    tmdbId,
-    mediaType,
-    addedAt: Timestamp.fromDate(new Date(traktFavorite.listed_at)),
-    traktId,
+    id: tmdbId,
+    media_type: mediaType, // snake_case
     title,
+    addedAt: Timestamp.fromDate(new Date(traktFavorite.listed_at)),
+    // These fields should be fetched from TMDB:
+    // poster_path, vote_average, release_date, genre_ids
   };
 }

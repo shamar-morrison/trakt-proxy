@@ -1,5 +1,5 @@
-import { Timestamp } from 'firebase-admin/firestore';
-import { db } from './firebase-admin';
+import { Timestamp } from "firebase-admin/firestore";
+import { db } from "./firebase-admin";
 import {
   getWatchedMovies,
   getWatchedShows,
@@ -9,7 +9,7 @@ import {
   getWatchlist,
   getFavorites,
   getUserProfile,
-} from './trakt-api';
+} from "./trakt-api";
 import {
   transformWatchedMovie,
   transformWatchedShow,
@@ -18,8 +18,8 @@ import {
   transformListItem,
   transformWatchlistItem,
   transformFavorite,
-} from '@/lib/logic/transform';
-import { FirestoreList, TraktSyncStatus } from '@/utils/types/trakt';
+} from "@/lib/logic/transform";
+import { FirestoreList, TraktSyncStatus } from "@/utils/types/trakt";
 
 interface SyncResult {
   success: boolean;
@@ -40,7 +40,7 @@ interface SyncResult {
  */
 export async function syncTraktData(
   userId: string,
-  accessToken: string
+  accessToken: string,
 ): Promise<SyncResult> {
   const errors: string[] = [];
   const itemsSynced = {
@@ -55,22 +55,26 @@ export async function syncTraktData(
 
   try {
     // Update sync status to in_progress
-    await updateSyncStatus(userId, 'in_progress', itemsSynced);
+    await updateSyncStatus(userId, "in_progress", itemsSynced);
 
     // Get user profile (needed for lists)
     const userProfile = await getUserProfile(accessToken);
 
-    // 1. Sync watched movies
+    // 1. Sync watched movies to already-watched
     try {
       const watchedMovies = await getWatchedMovies(accessToken);
-      itemsSynced.movies = await syncWatchedMovies(userId, watchedMovies);
+      itemsSynced.movies = await syncAlreadyWatched(
+        userId,
+        watchedMovies,
+        "movies",
+      );
     } catch (error) {
       const errorMsg = `Failed to sync watched movies: ${error}`;
       console.error(errorMsg);
       errors.push(errorMsg);
     }
 
-    // 2. Sync watched shows and episodes
+    // 2. Sync watched shows to already-watched and episode tracking
     try {
       const watchedShows = await getWatchedShows(accessToken);
       const { shows, episodes } = await syncWatchedShows(userId, watchedShows);
@@ -119,7 +123,7 @@ export async function syncTraktData(
         userId,
         accessToken,
         userProfile.username,
-        lists
+        lists,
       );
     } catch (error) {
       const errorMsg = `Failed to sync custom lists: ${error}`;
@@ -130,9 +134,9 @@ export async function syncTraktData(
     // Update sync status to completed
     await updateSyncStatus(
       userId,
-      errors.length > 0 ? 'failed' : 'completed',
+      errors.length > 0 ? "failed" : "completed",
       itemsSynced,
-      errors
+      errors,
     );
 
     return {
@@ -145,7 +149,7 @@ export async function syncTraktData(
     console.error(errorMsg);
     errors.push(errorMsg);
 
-    await updateSyncStatus(userId, 'failed', itemsSynced, errors);
+    await updateSyncStatus(userId, "failed", itemsSynced, errors);
 
     return {
       success: false,
@@ -156,31 +160,41 @@ export async function syncTraktData(
 }
 
 /**
- * Sync watched movies to Firestore
+ * Sync already watched items (movies or shows) to lists/already-watched
  */
-async function syncWatchedMovies(
+async function syncAlreadyWatched(
   userId: string,
-  traktMovies: Awaited<ReturnType<typeof getWatchedMovies>>
+  traktMovies: Awaited<ReturnType<typeof getWatchedMovies>>,
+  type: "movies",
 ): Promise<number> {
-  const batch = db.batch();
+  const items: Record<string, any> = {};
   let count = 0;
 
   for (const traktMovie of traktMovies) {
-    const movie = transformWatchedMovie(traktMovie);
-    if (movie) {
-      const docRef = db
-        .collection('users')
-        .doc(userId)
-        .collection('watchlist')
-        .doc(`movie_${movie.tmdbId}`);
-
-      batch.set(docRef, movie, { merge: true });
+    const item = transformWatchedMovie(traktMovie);
+    if (item) {
+      const itemKey = `movie-${item.id}`;
+      items[itemKey] = item;
       count++;
     }
   }
 
   if (count > 0) {
-    await batch.commit();
+    const alreadyWatchedRef = db
+      .collection("users")
+      .doc(userId)
+      .collection("lists")
+      .doc("already-watched");
+
+    await alreadyWatchedRef.set(
+      {
+        id: "already-watched",
+        name: "Already Watched",
+        createdAt: Timestamp.now(),
+        items,
+      },
+      { merge: true },
+    );
   }
 
   return count;
@@ -191,50 +205,59 @@ async function syncWatchedMovies(
  */
 async function syncWatchedShows(
   userId: string,
-  traktShows: Awaited<ReturnType<typeof getWatchedShows>>
+  traktShows: Awaited<ReturnType<typeof getWatchedShows>>,
 ): Promise<{ shows: number; episodes: number }> {
-  const watchlistBatch = db.batch();
   const episodeBatch = db.batch();
+  const alreadyWatchedItems: Record<string, any> = {};
   let showCount = 0;
   let episodeCount = 0;
 
   for (const traktShow of traktShows) {
-    // Add to watchlist
-    const show = transformWatchedShow(traktShow);
-    if (show) {
-      const watchlistRef = db
-        .collection('users')
-        .doc(userId)
-        .collection('watchlist')
-        .doc(`tv_${show.tmdbId}`);
-
-      watchlistBatch.set(watchlistRef, show, { merge: true });
-      showCount++;
-    }
-
     // Add episode tracking
     const episodeTracking = transformEpisodeTracking(traktShow);
-    if (episodeTracking) {
+    if (episodeTracking && traktShow.show.ids.tmdb) {
       const episodeRef = db
-        .collection('users')
+        .collection("users")
         .doc(userId)
-        .collection('episode_tracking')
-        .doc(episodeTracking.showTmdbId.toString());
+        .collection("episode_tracking")
+        .doc(traktShow.show.ids.tmdb.toString()); // Use TMDB ID as doc ID
 
       episodeBatch.set(episodeRef, episodeTracking, { merge: true });
 
-      // Count total episodes
-      Object.values(episodeTracking.seasons).forEach((season) => {
-        episodeCount += Object.keys(season.episodes).length;
-      });
+      // Count episodes
+      episodeCount += Object.keys(episodeTracking.episodes).length;
+      showCount++;
+    }
+
+    // Add to already-watched list
+    const watchedShow = transformWatchedShow(traktShow);
+    if (watchedShow) {
+      const itemKey = `tv-${watchedShow.id}`;
+      alreadyWatchedItems[itemKey] = watchedShow;
     }
   }
 
   if (showCount > 0) {
-    await watchlistBatch.commit();
-  }
-  if (episodeCount > 0) {
     await episodeBatch.commit();
+  }
+
+  // Add shows to already-watched list
+  if (Object.keys(alreadyWatchedItems).length > 0) {
+    const alreadyWatchedRef = db
+      .collection("users")
+      .doc(userId)
+      .collection("lists")
+      .doc("already-watched");
+
+    await alreadyWatchedRef.set(
+      {
+        id: "already-watched",
+        name: "Already Watched",
+        createdAt: Timestamp.now(),
+        items: alreadyWatchedItems,
+      },
+      { merge: true },
+    );
   }
 
   return { shows: showCount, episodes: episodeCount };
@@ -245,7 +268,7 @@ async function syncWatchedShows(
  */
 async function syncRatings(
   userId: string,
-  traktRatings: Awaited<ReturnType<typeof getRatings>>
+  traktRatings: Awaited<ReturnType<typeof getRatings>>,
 ): Promise<number> {
   const batch = db.batch();
   let count = 0;
@@ -254,10 +277,10 @@ async function syncRatings(
     const rating = transformRating(traktRating);
     if (rating) {
       const docRef = db
-        .collection('users')
+        .collection("users")
         .doc(userId)
-        .collection('ratings')
-        .doc(`${rating.mediaType}_${rating.tmdbId}`);
+        .collection("ratings")
+        .doc(rating.id); // Already includes hyphen: "movie-123" or "tv-456"
 
       batch.set(docRef, rating, { merge: true });
       count++;
@@ -273,30 +296,41 @@ async function syncRatings(
 
 /**
  * Sync watchlist to Firestore
+ * Stores as items map inside lists/watchlist document
  */
 async function syncWatchlist(
   userId: string,
-  traktWatchlist: Awaited<ReturnType<typeof getWatchlist>>
+  traktWatchlist: Awaited<ReturnType<typeof getWatchlist>>,
 ): Promise<number> {
-  const batch = db.batch();
+  const items: Record<string, any> = {};
   let count = 0;
 
   for (const traktItem of traktWatchlist) {
     const item = transformWatchlistItem(traktItem);
     if (item) {
-      const docRef = db
-        .collection('users')
-        .doc(userId)
-        .collection('watchlist')
-        .doc(`${item.mediaType}_${item.tmdbId}`);
-
-      batch.set(docRef, item, { merge: true });
+      const itemKey = `${item.media_type}-${item.id}`;
+      items[itemKey] = item;
       count++;
     }
   }
 
   if (count > 0) {
-    await batch.commit();
+    const watchlistRef = db
+      .collection("users")
+      .doc(userId)
+      .collection("lists")
+      .doc("watchlist");
+
+    await watchlistRef.set(
+      {
+        items,
+        metadata: {
+          lastUpdated: Timestamp.now(),
+          itemCount: count,
+        },
+      },
+      { merge: true },
+    );
   }
 
   return count;
@@ -304,30 +338,41 @@ async function syncWatchlist(
 
 /**
  * Sync favorites to Firestore
+ * Stores as items map inside lists/favorites document
  */
 async function syncFavorites(
   userId: string,
-  traktFavorites: Awaited<ReturnType<typeof getFavorites>>
+  traktFavorites: Awaited<ReturnType<typeof getFavorites>>,
 ): Promise<number> {
-  const batch = db.batch();
+  const items: Record<string, any> = {};
   let count = 0;
 
   for (const traktFavorite of traktFavorites) {
     const favorite = transformFavorite(traktFavorite);
     if (favorite) {
-      const docRef = db
-        .collection('users')
-        .doc(userId)
-        .collection('favorites')
-        .doc(`${favorite.mediaType}_${favorite.tmdbId}`);
-
-      batch.set(docRef, favorite, { merge: true });
+      const itemKey = `${favorite.media_type}-${favorite.id}`;
+      items[itemKey] = favorite;
       count++;
     }
   }
 
   if (count > 0) {
-    await batch.commit();
+    const favoritesRef = db
+      .collection("users")
+      .doc(userId)
+      .collection("lists")
+      .doc("favorites");
+
+    await favoritesRef.set(
+      {
+        items,
+        metadata: {
+          lastUpdated: Timestamp.now(),
+          itemCount: count,
+        },
+      },
+      { merge: true },
+    );
   }
 
   return count;
@@ -340,7 +385,7 @@ async function syncCustomLists(
   userId: string,
   accessToken: string,
   username: string,
-  traktLists: Awaited<ReturnType<typeof getUserLists>>
+  traktLists: Awaited<ReturnType<typeof getUserLists>>,
 ): Promise<number> {
   let count = 0;
 
@@ -351,7 +396,7 @@ async function syncCustomLists(
       const listItems = await getListItems(
         accessToken,
         username,
-        traktList.ids.slug
+        traktList.ids.slug,
       );
 
       // Transform list items
@@ -362,19 +407,19 @@ async function syncCustomLists(
       // Create Firestore list document
       const firestoreList: FirestoreList = {
         name: traktList.name,
-        description: traktList.description || '',
+        description: traktList.description || "",
         createdAt: Timestamp.fromDate(new Date(traktList.created_at)),
         updatedAt: Timestamp.fromDate(new Date(traktList.updated_at)),
         items: items as any[],
         traktId: traktList.ids.trakt,
-        privacy: traktList.privacy === 'public' ? 'public' : 'private',
+        privacy: traktList.privacy === "public" ? "public" : "private",
       };
 
       // Save to Firestore
       const docRef = db
-        .collection('users')
+        .collection("users")
         .doc(userId)
-        .collection('lists')
+        .collection("lists")
         .doc(`trakt_${traktList.ids.trakt}`);
 
       await docRef.set(firestoreList);
@@ -392,9 +437,9 @@ async function syncCustomLists(
  */
 async function updateSyncStatus(
   userId: string,
-  status: TraktSyncStatus['status'],
-  itemsSynced: TraktSyncStatus['itemsSynced'],
-  errors?: string[]
+  status: TraktSyncStatus["status"],
+  itemsSynced: TraktSyncStatus["itemsSynced"],
+  errors?: string[],
 ): Promise<void> {
   const syncStatus: Partial<TraktSyncStatus> = {
     userId,
@@ -407,10 +452,7 @@ async function updateSyncStatus(
     syncStatus.errors = errors;
   }
 
-  await db
-    .collection('users')
-    .doc(userId)
-    .update({
-      traktSyncStatus: syncStatus,
-    });
+  await db.collection("users").doc(userId).update({
+    traktSyncStatus: syncStatus,
+  });
 }
