@@ -64,12 +64,13 @@ export async function syncTraktData(
     const allAlreadyWatchedItems: Record<string, any> = {};
 
     // 1. Sync watched movies and collect for already-watched
+    // 1. Sync watched movies and collect for already-watched
     try {
       const watchedMovies = await getWatchedMovies(accessToken);
       for (const traktMovie of watchedMovies) {
         const item = transformWatchedMovie(traktMovie);
         if (item) {
-          allAlreadyWatchedItems[`movie-${item.id}`] = item;
+          allAlreadyWatchedItems[item.id.toString()] = item;
           itemsSynced.movies++;
         }
       }
@@ -229,7 +230,7 @@ async function syncWatchedShows(
     // Collect for already-watched list
     const watchedShow = transformWatchedShow(traktShow);
     if (watchedShow) {
-      alreadyWatchedShows[`tv-${watchedShow.id}`] = watchedShow;
+      alreadyWatchedShows[watchedShow.id.toString()] = watchedShow;
     }
   }
 
@@ -285,8 +286,7 @@ async function syncWatchlist(
   for (const traktItem of traktWatchlist) {
     const item = transformWatchlistItem(traktItem);
     if (item) {
-      const itemKey = `${item.media_type}-${item.id}`;
-      items[itemKey] = item;
+      items[item.id.toString()] = item;
       count++;
     }
   }
@@ -327,8 +327,7 @@ async function syncFavorites(
   for (const traktFavorite of traktFavorites) {
     const favorite = transformFavorite(traktFavorite);
     if (favorite) {
-      const itemKey = `${favorite.media_type}-${favorite.id}`;
-      items[itemKey] = favorite;
+      items[favorite.id.toString()] = favorite;
       count++;
     }
   }
