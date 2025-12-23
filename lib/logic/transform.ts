@@ -121,8 +121,8 @@ export function transformRating(traktRating: TraktRating) {
     return null;
   }
 
-  // Convert Trakt's 1-10 rating to 5-star system
-  const convertedRating = traktRating.rating / 2;
+  // Use Trakt's 1-10 rating directly
+  const convertedRating = traktRating.rating;
 
   return {
     id: `${mediaType}-${tmdbId}`, // Must match document ID
