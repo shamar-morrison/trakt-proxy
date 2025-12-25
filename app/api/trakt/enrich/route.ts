@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Timestamp } from "firebase-admin/firestore";
 
 import { db } from "@/lib/firebase-admin";
 import { enrichMediaItems, enrichEpisodeTracking } from "@/lib/tmdb-enrich";
@@ -120,9 +121,21 @@ export async function POST(request: NextRequest) {
               episodeData.episodes,
             );
 
+            // Normalize metadata.lastUpdated if it's a number
+            let lastUpdated = episodeData.metadata?.lastUpdated;
+            if (typeof lastUpdated === "number") {
+              lastUpdated = Timestamp.fromMillis(lastUpdated);
+            } else if (typeof lastUpdated === "string") {
+              const date = new Date(lastUpdated);
+              if (!isNaN(date.getTime())) {
+                lastUpdated = Timestamp.fromDate(date);
+              }
+            }
+
             await doc.ref.update({
               episodes: enrichedEpisodes,
-              "metadata.lastEnriched": new Date(),
+              "metadata.lastEnriched": Timestamp.now(),
+              ...(lastUpdated && { "metadata.lastUpdated": lastUpdated }),
             });
 
             enrichedCounts.episodes += Object.keys(enrichedEpisodes).length;
