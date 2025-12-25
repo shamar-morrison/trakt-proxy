@@ -233,9 +233,16 @@ export async function enrichEpisodeTracking(
 
     if (!seasonCache) {
       // Season is being populated by another request or failed
+      console.log(
+        `Season ${seasonNumber} cache returned null for show ${showId} - skipping ${episodesBySeason[seasonNumber].length} episodes`,
+      );
       skippedCount += episodesBySeason[seasonNumber].length;
       continue;
     }
+
+    console.log(
+      `Processing season ${seasonNumber} for show ${showId} - ${episodesBySeason[seasonNumber].length} episodes, cache has ${Object.keys(seasonCache.episodes).length} episodes`,
+    );
 
     // Step 3: Enrich episodes from cache
     for (const key of episodesBySeason[seasonNumber]) {
@@ -267,37 +274,42 @@ export async function enrichEpisodeTracking(
 
       const cachedEpisode = seasonCache.episodes[episodeNumber.toString()];
 
-      if (cachedEpisode) {
-        // Normalize watchedAt to Firestore Timestamp if needed
-        let watchedAt = episode.watchedAt;
-        if (typeof watchedAt === "number") {
-          watchedAt = Timestamp.fromMillis(watchedAt);
-        } else if (typeof watchedAt === "string") {
-          const date = new Date(watchedAt);
-          if (!isNaN(date.getTime())) {
-            watchedAt = Timestamp.fromDate(date);
-          } else {
-            console.warn(
-              `Invalid watchedAt date string for episode ${key}: "${episode.watchedAt}". Using current date.`,
-            );
-            watchedAt = Timestamp.now();
-          }
-        }
-
-        // Preserve watched and watchedAt, add enriched fields
-        enrichedEpisodes[key] = {
-          ...episode, // Preserve watched, watchedAt, and any existing fields
-          watchedAt, // Overwrite with normalized Timestamp
-          episodeId: cachedEpisode.episodeId,
-          episodeName: cachedEpisode.episodeName,
-          episodeAirDate: cachedEpisode.episodeAirDate,
-          episodeNumber: episodeNumber,
-          seasonNumber: seasonNumber,
-          tvShowId: showId,
-          // Note: posterPath is not stored in cache (per requirements)
-        };
-        enrichedCount++;
+      if (!cachedEpisode) {
+        console.log(
+          `Episode ${episodeNumber} not found in cache for show ${showId} season ${seasonNumber}. Cache keys: ${Object.keys(seasonCache.episodes).join(", ")}`,
+        );
+        continue;
       }
+
+      // Normalize watchedAt to Firestore Timestamp if needed
+      let watchedAt = episode.watchedAt;
+      if (typeof watchedAt === "number") {
+        watchedAt = Timestamp.fromMillis(watchedAt);
+      } else if (typeof watchedAt === "string") {
+        const date = new Date(watchedAt);
+        if (!isNaN(date.getTime())) {
+          watchedAt = Timestamp.fromDate(date);
+        } else {
+          console.warn(
+            `Invalid watchedAt date string for episode ${key}: "${episode.watchedAt}". Using current date.`,
+          );
+          watchedAt = Timestamp.now();
+        }
+      }
+
+      // Preserve watched and watchedAt, add enriched fields
+      enrichedEpisodes[key] = {
+        ...episode, // Preserve watched, watchedAt, and any existing fields
+        watchedAt, // Overwrite with normalized Timestamp
+        episodeId: cachedEpisode.episodeId,
+        episodeName: cachedEpisode.episodeName,
+        episodeAirDate: cachedEpisode.episodeAirDate,
+        episodeNumber: episodeNumber,
+        seasonNumber: seasonNumber,
+        tvShowId: showId,
+        // Note: posterPath is not stored in cache (per requirements)
+      };
+      enrichedCount++;
     }
   }
 
