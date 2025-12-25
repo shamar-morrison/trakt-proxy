@@ -3,6 +3,7 @@
  * Fetches missing metadata like posters, ratings, genres
  */
 
+import { Timestamp } from "firebase-admin/firestore";
 import { getSeasonFromCacheOrTMDB } from "@/lib/tmdb-cache";
 import { TMDB_API_BASE } from "@/utils/constants";
 
@@ -240,14 +241,22 @@ export async function enrichEpisodeTracking(
     for (const key of episodesBySeason[seasonNumber]) {
       const episode = episodes[key];
 
-      // Skip if already fully enriched
+      // Check if watchedAt needs normalization (is number or string instead of Timestamp)
+      const watchedAtNeedsNormalization =
+        episode.watchedAt &&
+        !(episode.watchedAt instanceof Timestamp) &&
+        (typeof episode.watchedAt === "number" ||
+          typeof episode.watchedAt === "string");
+
+      // Skip if already fully enriched AND watchedAt is correct format
       if (
         episode.episodeId &&
         episode.episodeName &&
         episode.episodeAirDate &&
         episode.episodeNumber &&
         episode.seasonNumber &&
-        episode.tvShowId
+        episode.tvShowId &&
+        !watchedAtNeedsNormalization
       ) {
         alreadyEnrichedCount++;
         continue;
@@ -259,9 +268,21 @@ export async function enrichEpisodeTracking(
       const cachedEpisode = seasonCache.episodes[episodeNumber.toString()];
 
       if (cachedEpisode) {
+        // Normalize watchedAt to Firestore Timestamp if needed
+        let watchedAt = episode.watchedAt;
+        if (typeof watchedAt === "number") {
+          watchedAt = Timestamp.fromMillis(watchedAt);
+        } else if (typeof watchedAt === "string") {
+          const date = new Date(watchedAt);
+          if (!isNaN(date.getTime())) {
+            watchedAt = Timestamp.fromDate(date);
+          }
+        }
+
         // Preserve watched and watchedAt, add enriched fields
         enrichedEpisodes[key] = {
           ...episode, // Preserve watched, watchedAt, and any existing fields
+          watchedAt, // Overwrite with normalized Timestamp
           episodeId: cachedEpisode.episodeId,
           episodeName: cachedEpisode.episodeName,
           episodeAirDate: cachedEpisode.episodeAirDate,
