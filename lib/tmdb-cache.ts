@@ -66,33 +66,69 @@ function isCacheStale(cache: SeasonCache): boolean {
 }
 
 /**
- * Determine if a season appears to be ongoing
- * A season is considered ongoing if:
- * - The latest episode has no air date, OR
- * - The latest episode aired within the last 14 days
+ * Determine if a season appears to be ongoing.
+ *
+ * A season is considered "ongoing" if it may receive new episodes or data updates soon.
+ * This affects cache TTL - ongoing seasons refresh more frequently (every 7 days)
+ * while completed seasons use a longer TTL (30 days).
+ *
+ * DETECTION LOGIC:
+ * 1. PREFER AIR DATES: Find the episode with the most recent (latest) air_date.
+ *    This is more reliable than episode numbers because episodes may air out of order,
+ *    be added retroactively, or have numbering gaps.
+ *
+ * 2. FALLBACK TO EPISODE NUMBER: If NO episodes have air dates, use the highest
+ *    episode number as a proxy for "latest". In this case, we assume the season
+ *    is ongoing since missing air dates often indicate upcoming/unaired episodes.
+ *
+ * A season IS ongoing if:
+ * - Any episode has no air date (indicates upcoming/unaired episodes), OR
+ * - The most recently aired episode aired within RECENT_AIR_DATE_DAYS (14 days)
+ *
+ * @param episodes - Record of episode number -> episode data
+ * @returns true if the season appears to be ongoing, false if it's complete
  */
 function isSeasonOngoing(
   episodes: Record<string, SeasonCacheEpisode>,
 ): boolean {
-  const episodeNumbers = Object.keys(episodes)
-    .map(Number)
-    .sort((a, b) => b - a);
+  const episodeList = Object.values(episodes);
 
-  if (episodeNumbers.length === 0) return false;
+  // No episodes means we can't determine status - treat as potentially ongoing
+  if (episodeList.length === 0) return false;
 
-  const latestEpisode = episodes[episodeNumbers[0].toString()];
-
-  // No air date means it might not have aired yet
-  if (!latestEpisode.episodeAirDate) {
+  // Check if ANY episode is missing an air date (indicates upcoming/unaired episodes)
+  // This catches cases where future episodes are announced but not yet aired
+  const hasEpisodeWithoutAirDate = episodeList.some((ep) => !ep.episodeAirDate);
+  if (hasEpisodeWithoutAirDate) {
     return true;
   }
 
-  // Check if the latest episode aired recently
-  const airDate = new Date(latestEpisode.episodeAirDate);
-  const daysSinceAired =
-    (Date.now() - airDate.getTime()) / (1000 * 60 * 60 * 24);
+  // All episodes have air dates - find the one with the LATEST (most recent) air date
+  // This is more reliable than episode numbers since episodes can air out of order
+  let latestAirDate: Date | null = null;
 
-  return daysSinceAired < RECENT_AIR_DATE_DAYS;
+  for (const episode of episodeList) {
+    // We already checked all have air dates above, but TypeScript needs the guard
+    if (!episode.episodeAirDate) continue;
+
+    const airDate = new Date(episode.episodeAirDate);
+
+    // Track the most recent air date
+    if (!latestAirDate || airDate > latestAirDate) {
+      latestAirDate = airDate;
+    }
+  }
+
+  // This shouldn't happen given the check above, but handle gracefully
+  if (!latestAirDate) {
+    return true;
+  }
+
+  // Check if the most recently aired episode is within the "recent" window
+  const daysSinceLatestAired =
+    (Date.now() - latestAirDate.getTime()) / (1000 * 60 * 60 * 24);
+
+  return daysSinceLatestAired < RECENT_AIR_DATE_DAYS;
 }
 
 /**
