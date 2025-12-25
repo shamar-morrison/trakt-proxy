@@ -188,54 +188,79 @@ export async function enrichMediaItems(
 }
 
 /**
- * Enrich episode tracking with TMDB episode data
+ * Enrich episode tracking with TMDB episode data using season-level caching
+ *
+ * This function:
+ * 1. Groups episodes by season
+ * 2. Fetches each season from cache or TMDB (one call per season)
+ * 3. Enriches episodes from the cached season data
+ * 4. Preserves existing `watched` and `watchedAt` fields
  */
 export async function enrichEpisodeTracking(
   showId: number,
   episodes: Record<string, any>,
-  batchSize: number = 5,
-  delayMs: number = 250,
 ): Promise<Record<string, any>> {
+  // Import dynamically to avoid circular dependencies
+  const { getSeasonFromCacheOrTMDB } = await import("@/lib/tmdb-cache");
+
   const enrichedEpisodes: Record<string, any> = { ...episodes };
   const episodeKeys = Object.keys(episodes);
 
-  for (let i = 0; i < episodeKeys.length; i += batchSize) {
-    const batch = episodeKeys.slice(i, i + batchSize);
+  // Step 1: Group episodes by season
+  const episodesBySeason: Record<number, string[]> = {};
 
-    const enrichedBatch = await Promise.all(
-      batch.map(async (key) => {
-        const [season, episode] = key.split("_").map(Number);
-        const tmdbEpisode = await fetchEpisodeDetails(showId, season, episode);
+  for (const key of episodeKeys) {
+    const [seasonStr] = key.split("_");
+    const seasonNumber = parseInt(seasonStr, 10);
 
-        if (tmdbEpisode) {
-          return {
-            key,
-            data: {
-              ...episodes[key],
-              episodeId: tmdbEpisode.id,
-              episodeName: tmdbEpisode.name,
-              episodeAirDate: tmdbEpisode.air_date,
-              posterPath: tmdbEpisode.still_path,
-            },
-          };
-        }
+    if (!episodesBySeason[seasonNumber]) {
+      episodesBySeason[seasonNumber] = [];
+    }
+    episodesBySeason[seasonNumber].push(key);
+  }
 
-        return { key, data: episodes[key] };
-      }),
-    );
+  const seasonNumbers = Object.keys(episodesBySeason).map(Number);
+  console.log(
+    `Enriching ${episodeKeys.length} episodes across ${seasonNumbers.length} seasons for show ${showId}`,
+  );
 
-    enrichedBatch.forEach(({ key, data }) => {
-      enrichedEpisodes[key] = data;
-    });
+  // Step 2: Fetch and enrich each season
+  let enrichedCount = 0;
+  let skippedCount = 0;
 
-    if (i + batchSize < episodeKeys.length) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+  for (const seasonNumber of seasonNumbers) {
+    const seasonCache = await getSeasonFromCacheOrTMDB(showId, seasonNumber);
+
+    if (!seasonCache) {
+      // Season is being populated by another request or failed
+      skippedCount += episodesBySeason[seasonNumber].length;
+      continue;
     }
 
-    console.log(
-      `Enriched ${Math.min(i + batchSize, episodeKeys.length)}/${episodeKeys.length} episodes for show ${showId}`,
-    );
+    // Step 3: Enrich episodes from cache
+    for (const key of episodesBySeason[seasonNumber]) {
+      const [, episodeStr] = key.split("_");
+      const episodeNumber = episodeStr;
+
+      const cachedEpisode = seasonCache.episodes[episodeNumber];
+
+      if (cachedEpisode) {
+        // Preserve watched and watchedAt, add enriched fields
+        enrichedEpisodes[key] = {
+          ...episodes[key], // Preserve watched, watchedAt, and any existing fields
+          episodeId: cachedEpisode.episodeId,
+          episodeName: cachedEpisode.episodeName,
+          episodeAirDate: cachedEpisode.episodeAirDate,
+          // Note: posterPath is not stored in cache (per requirements)
+        };
+        enrichedCount++;
+      }
+    }
   }
+
+  console.log(
+    `Enriched ${enrichedCount} episodes for show ${showId} (${skippedCount} skipped)`,
+  );
 
   return enrichedEpisodes;
 }

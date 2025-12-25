@@ -33,6 +33,7 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+prompt.md
 next-env.d.ts
 
 */trakt-test
