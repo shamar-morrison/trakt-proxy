@@ -278,14 +278,17 @@ export async function getSeasonFromCacheOrTMDB(
     const tmdbSeason = await fetchSeasonFromTMDB(tmdbShowId, seasonNumber);
 
     if (!tmdbSeason) {
-      // TMDB fetch failed - set error status to prevent concurrent retry storms
+      // TMDB fetch failed - set error status to prevent concurrent retry storms.
+      // IMPORTANT: Use merge: true to preserve any previously cached episodes.
+      // If we used merge: false or set episodes: {}, we would destroy valid
+      // cached data from a previous successful fetch. The ERROR_TTL ensures
+      // we can still retry and refresh the cache after the backoff period.
       await seasonRef.set(
         {
           status: "error",
           lastUpdated: Timestamp.now(),
-          episodes: {}, // Clear any partial data
         },
-        { merge: false },
+        { merge: true },
       );
       console.log(
         `Marked season ${seasonNumber} for show ${tmdbShowId} as error, will retry after ${ERROR_TTL_MINUTES} minutes`,
