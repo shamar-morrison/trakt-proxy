@@ -58,8 +58,8 @@ Replace per-episode TMDB calls with **season-level caching** in Firestore to:
 
 ```
 tmdb_cache/
-  shows/{tmdbShowId}/
-    seasons/{seasonNumber}
+  show_seasons/{tmdbShowId}_{seasonNumber}   # e.g. show_seasons/103540_1
+  movies/{movieId}                           # future extensibility
 ```
 
 ### Season document shape
@@ -103,7 +103,7 @@ getSeasonFromCacheOrTMDB(
 
 ### 2. Cache lookup logic
 
-1. Check Firestore for `tmdb_cache/shows/{tmdbShowId}/seasons/{seasonNumber}`
+1. Check Firestore for `tmdb_cache/show_seasons/{tmdbShowId}_{seasonNumber}`
 2. If the document exists and:
    - `status === "complete"`
    - Cache is **not stale**
