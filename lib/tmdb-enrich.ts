@@ -3,6 +3,7 @@
  * Fetches missing metadata like posters, ratings, genres
  */
 
+import { Timestamp } from "firebase-admin/firestore";
 import { getSeasonFromCacheOrTMDB } from "@/lib/tmdb-cache";
 import { TMDB_API_BASE } from "@/utils/constants";
 
@@ -232,36 +233,83 @@ export async function enrichEpisodeTracking(
 
     if (!seasonCache) {
       // Season is being populated by another request or failed
+      console.log(
+        `Season ${seasonNumber} cache returned null for show ${showId} - skipping ${episodesBySeason[seasonNumber].length} episodes`,
+      );
       skippedCount += episodesBySeason[seasonNumber].length;
       continue;
     }
+
+    console.log(
+      `Processing season ${seasonNumber} for show ${showId} - ${episodesBySeason[seasonNumber].length} episodes, cache has ${Object.keys(seasonCache.episodes).length} episodes`,
+    );
 
     // Step 3: Enrich episodes from cache
     for (const key of episodesBySeason[seasonNumber]) {
       const episode = episodes[key];
 
-      // Skip if already fully enriched
-      if (episode.episodeId && episode.episodeName && episode.episodeAirDate) {
+      // Check if watchedAt needs normalization (is number or string instead of Timestamp)
+      const watchedAtNeedsNormalization =
+        episode.watchedAt &&
+        !(episode.watchedAt instanceof Timestamp) &&
+        (typeof episode.watchedAt === "number" ||
+          typeof episode.watchedAt === "string");
+
+      // Skip if already fully enriched AND watchedAt is correct format
+      if (
+        episode.episodeId &&
+        episode.episodeName &&
+        episode.episodeAirDate &&
+        episode.episodeNumber &&
+        episode.seasonNumber &&
+        episode.tvShowId &&
+        !watchedAtNeedsNormalization
+      ) {
         alreadyEnrichedCount++;
         continue;
       }
 
       const [, episodeStr] = key.split("_");
-      const episodeNumber = episodeStr;
+      const episodeNumber = parseInt(episodeStr, 10);
 
-      const cachedEpisode = seasonCache.episodes[episodeNumber];
+      const cachedEpisode = seasonCache.episodes[episodeNumber.toString()];
 
-      if (cachedEpisode) {
-        // Preserve watched and watchedAt, add enriched fields
-        enrichedEpisodes[key] = {
-          ...episode, // Preserve watched, watchedAt, and any existing fields
-          episodeId: cachedEpisode.episodeId,
-          episodeName: cachedEpisode.episodeName,
-          episodeAirDate: cachedEpisode.episodeAirDate,
-          // Note: posterPath is not stored in cache (per requirements)
-        };
-        enrichedCount++;
+      if (!cachedEpisode) {
+        console.log(
+          `Episode ${episodeNumber} not found in cache for show ${showId} season ${seasonNumber}. Cache keys: ${Object.keys(seasonCache.episodes).join(", ")}`,
+        );
+        continue;
       }
+
+      // Normalize watchedAt to Firestore Timestamp if needed
+      let watchedAt = episode.watchedAt;
+      if (typeof watchedAt === "number") {
+        watchedAt = Timestamp.fromMillis(watchedAt);
+      } else if (typeof watchedAt === "string") {
+        const date = new Date(watchedAt);
+        if (!isNaN(date.getTime())) {
+          watchedAt = Timestamp.fromDate(date);
+        } else {
+          console.warn(
+            `Invalid watchedAt date string for episode ${key}: "${episode.watchedAt}". Using current date.`,
+          );
+          watchedAt = Timestamp.now();
+        }
+      }
+
+      // Preserve watched and watchedAt, add enriched fields
+      enrichedEpisodes[key] = {
+        ...episode, // Preserve watched, watchedAt, and any existing fields
+        watchedAt, // Overwrite with normalized Timestamp
+        episodeId: cachedEpisode.episodeId,
+        episodeName: cachedEpisode.episodeName,
+        episodeAirDate: cachedEpisode.episodeAirDate,
+        episodeNumber: episodeNumber,
+        seasonNumber: seasonNumber,
+        tvShowId: showId,
+        // Note: posterPath is not stored in cache (per requirements)
+      };
+      enrichedCount++;
     }
   }
 
