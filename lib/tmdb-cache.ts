@@ -93,8 +93,9 @@ function isSeasonOngoing(
 ): boolean {
   const episodeList = Object.values(episodes);
 
-  // No episodes means we can't determine status - treat as potentially ongoing
-  if (episodeList.length === 0) return false;
+  // No episodes means we can't determine status - treat as ongoing (conservative)
+  // This ensures we use the shorter ONGOING_TTL_DAYS for more frequent refreshes
+  if (episodeList.length === 0) return true;
 
   // Check if ANY episode is missing an air date (indicates upcoming/unaired episodes)
   // This catches cases where future episodes are announced but not yet aired
