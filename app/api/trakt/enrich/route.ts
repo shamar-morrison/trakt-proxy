@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Timestamp } from "firebase-admin/firestore";
 
 import { db } from "@/lib/firebase-admin";
 import { enrichMediaItems, enrichEpisodeTracking } from "@/lib/tmdb-enrich";
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
         // Update the list with enriched data
         await listRef.update({
           items: enrichedItems,
-          "metadata.lastEnriched": new Date(),
+          "metadata.lastEnriched": Timestamp.now(),
         });
 
         enrichedCounts.lists++;
@@ -120,9 +121,37 @@ export async function POST(request: NextRequest) {
               episodeData.episodes,
             );
 
+            // Normalize metadata.lastUpdated to a Firestore Timestamp
+            let lastUpdated: Timestamp | undefined = undefined;
+            const rawLastUpdated = episodeData.metadata?.lastUpdated;
+
+            if (rawLastUpdated instanceof Timestamp) {
+              // Already a Timestamp, keep as-is
+              lastUpdated = rawLastUpdated;
+            } else if (rawLastUpdated instanceof Date) {
+              // Convert Date to Timestamp
+              if (!isNaN(rawLastUpdated.getTime())) {
+                lastUpdated = Timestamp.fromDate(rawLastUpdated);
+              }
+            } else if (typeof rawLastUpdated === "number") {
+              // Convert number (milliseconds) to Timestamp
+              lastUpdated = Timestamp.fromMillis(rawLastUpdated);
+            } else if (typeof rawLastUpdated === "string") {
+              // Parse string to Date, convert only if valid
+              const date = new Date(rawLastUpdated);
+              if (!isNaN(date.getTime())) {
+                lastUpdated = Timestamp.fromDate(date);
+              }
+            }
+            // If none of the above, lastUpdated remains undefined and won't be written
+
             await doc.ref.update({
               episodes: enrichedEpisodes,
-              "metadata.lastEnriched": new Date(),
+              "metadata.lastEnriched": Timestamp.now(),
+              // Only include lastUpdated if it's a valid Timestamp instance
+              ...(lastUpdated instanceof Timestamp && {
+                "metadata.lastUpdated": lastUpdated,
+              }),
             });
 
             enrichedCounts.episodes += Object.keys(enrichedEpisodes).length;
