@@ -227,6 +227,7 @@ export async function enrichEpisodeTracking(
   // Step 2: Fetch and enrich each season
   let enrichedCount = 0;
   let skippedCount = 0;
+  let alreadyEnrichedCount = 0;
 
   for (const seasonNumber of seasonNumbers) {
     const seasonCache = await getSeasonFromCacheOrTMDB(showId, seasonNumber);
@@ -239,6 +240,14 @@ export async function enrichEpisodeTracking(
 
     // Step 3: Enrich episodes from cache
     for (const key of episodesBySeason[seasonNumber]) {
+      const episode = episodes[key];
+
+      // Skip if already fully enriched
+      if (episode.episodeId && episode.episodeName && episode.episodeAirDate) {
+        alreadyEnrichedCount++;
+        continue;
+      }
+
       const [, episodeStr] = key.split("_");
       const episodeNumber = episodeStr;
 
@@ -247,7 +256,7 @@ export async function enrichEpisodeTracking(
       if (cachedEpisode) {
         // Preserve watched and watchedAt, add enriched fields
         enrichedEpisodes[key] = {
-          ...episodes[key], // Preserve watched, watchedAt, and any existing fields
+          ...episode, // Preserve watched, watchedAt, and any existing fields
           episodeId: cachedEpisode.episodeId,
           episodeName: cachedEpisode.episodeName,
           episodeAirDate: cachedEpisode.episodeAirDate,
@@ -259,7 +268,7 @@ export async function enrichEpisodeTracking(
   }
 
   console.log(
-    `Enriched ${enrichedCount} episodes for show ${showId} (${skippedCount} skipped)`,
+    `Enriched ${enrichedCount} episodes for show ${showId} (${alreadyEnrichedCount} already enriched, ${skippedCount} skipped)`,
   );
 
   return enrichedEpisodes;
