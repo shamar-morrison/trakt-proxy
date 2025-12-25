@@ -152,8 +152,15 @@ function transformSeasonData(
  *
  * This function implements:
  * - Cache lookup with freshness check
- * - Concurrency safety (skips if another request is populating)
+ * - Transaction-safe concurrency protection (prevents duplicate TMDB fetches)
  * - Automatic TTL-based refresh
+ *
+ * CONCURRENCY PROTECTION:
+ * Uses a Firestore transaction to atomically check and set the "populating" status.
+ * This prevents the race condition where multiple concurrent requests could read
+ * the document, all see it's not populating, and then all fetch from TMDB.
+ * Only the request that successfully commits the transaction may proceed with
+ * the TMDB fetch - all others receive null and skip fetching.
  *
  * @param tmdbShowId - TMDB show ID
  * @param seasonNumber - Season number
@@ -168,67 +175,110 @@ export async function getSeasonFromCacheOrTMDB(
   );
 
   try {
-    // Step 1: Check cache
-    const cacheDoc = await seasonRef.get();
+    // ========================================================================
+    // STEP 1: Transaction-safe lock acquisition
+    // ========================================================================
+    // Use a transaction to atomically:
+    // 1. Read the current document state
+    // 2. Determine if we should fetch from TMDB
+    // 3. Set status = "populating" if we're the one who should fetch
+    //
+    // The transaction guarantees that only ONE request can successfully
+    // commit the "populating" status - all concurrent requests will either:
+    // - See "populating" and abort
+    // - Have their transaction conflict and retry (seeing "populating")
+    // ========================================================================
 
-    if (cacheDoc.exists) {
-      const cacheData = cacheDoc.data() as SeasonCache;
+    const transactionResult = await db.runTransaction(async (transaction) => {
+      const cacheDoc = await transaction.get(seasonRef);
 
-      // If another request is populating, skip to avoid duplicate TMDB calls
-      if (cacheData.status === "populating") {
-        console.log(
-          `Season ${seasonNumber} for show ${tmdbShowId} is being populated, skipping`,
-        );
-        return null;
-      }
+      if (cacheDoc.exists) {
+        const cacheData = cacheDoc.data() as SeasonCache;
 
-      // If in error state, check if we should retry
-      if (cacheData.status === "error") {
-        const errorAgeMs = Date.now() - cacheData.lastUpdated.toMillis();
-        const errorTtlMs = ERROR_TTL_MINUTES * 60 * 1000;
-
-        if (errorAgeMs < errorTtlMs) {
+        // CASE 1: Another request is already populating - abort immediately
+        // This prevents duplicate TMDB fetches
+        if (cacheData.status === "populating") {
           console.log(
-            `Season ${seasonNumber} for show ${tmdbShowId} recently errored, skipping for ${Math.ceil((errorTtlMs - errorAgeMs) / 1000)}s`,
+            `Season ${seasonNumber} for show ${tmdbShowId} is being populated, skipping`,
           );
-          return null;
+          return { action: "skip" as const, data: null };
         }
-        // Error TTL expired, allow retry
+
+        // CASE 2: Previous fetch errored - check if we should retry
+        if (cacheData.status === "error") {
+          const errorAgeMs = Date.now() - cacheData.lastUpdated.toMillis();
+          const errorTtlMs = ERROR_TTL_MINUTES * 60 * 1000;
+
+          if (errorAgeMs < errorTtlMs) {
+            // Error TTL not expired yet - wait before retrying
+            console.log(
+              `Season ${seasonNumber} for show ${tmdbShowId} recently errored, skipping for ${Math.ceil((errorTtlMs - errorAgeMs) / 1000)}s`,
+            );
+            return { action: "skip" as const, data: null };
+          }
+          // Error TTL expired - allow retry, fall through to acquire lock
+          console.log(
+            `Error TTL expired for show ${tmdbShowId} season ${seasonNumber}, retrying`,
+          );
+        }
+
+        // CASE 3: Cache is fresh and complete - return it directly
+        if (cacheData.status === "complete" && !isCacheStale(cacheData)) {
+          console.log(
+            `Using cached season data for show ${tmdbShowId} season ${seasonNumber}`,
+          );
+          return { action: "return_cache" as const, data: cacheData };
+        }
+
+        // Cache is stale - need to refresh
         console.log(
-          `Error TTL expired for show ${tmdbShowId} season ${seasonNumber}, retrying`,
+          `Cache stale for show ${tmdbShowId} season ${seasonNumber}, refreshing`,
         );
       }
 
-      // If cache is fresh, return it
-      if (cacheData.status === "complete" && !isCacheStale(cacheData)) {
-        console.log(
-          `Using cached season data for show ${tmdbShowId} season ${seasonNumber}`,
-        );
-        return cacheData;
-      }
-
-      console.log(
-        `Cache stale for show ${tmdbShowId} season ${seasonNumber}, refreshing`,
+      // ======================================================================
+      // ACQUIRE LOCK: Set status = "populating" atomically within transaction
+      // ======================================================================
+      // This is the critical section - only ONE request can successfully
+      // commit this transaction. All other concurrent requests will either:
+      // - See our "populating" status and skip (first check above)
+      // - Have their transaction fail due to the conflict and retry
+      // ======================================================================
+      transaction.set(
+        seasonRef,
+        {
+          status: "populating",
+          lastUpdated: Timestamp.now(),
+        },
+        { merge: true },
       );
+
+      return { action: "fetch" as const, data: null };
+    });
+
+    // Handle transaction results
+    if (transactionResult.action === "skip") {
+      return null;
     }
 
-    // Step 2: Mark as populating (optimistic lock)
-    await seasonRef.set(
-      {
-        status: "populating",
-        lastUpdated: Timestamp.now(),
-      },
-      { merge: true },
-    );
+    if (transactionResult.action === "return_cache") {
+      return transactionResult.data;
+    }
 
-    // Step 3: Fetch from TMDB
+    // ========================================================================
+    // STEP 2: Fetch from TMDB (only if we acquired the lock)
+    // ========================================================================
+    // At this point, we successfully committed the transaction with
+    // status = "populating", so we're the only request that should fetch.
+    // ========================================================================
+
     console.log(
       `Fetching season ${seasonNumber} for show ${tmdbShowId} from TMDB`,
     );
     const tmdbSeason = await fetchSeasonFromTMDB(tmdbShowId, seasonNumber);
 
     if (!tmdbSeason) {
-      // Set error status instead of deleting - prevents concurrent retry storms
+      // TMDB fetch failed - set error status to prevent concurrent retry storms
       await seasonRef.set(
         {
           status: "error",
@@ -243,7 +293,10 @@ export async function getSeasonFromCacheOrTMDB(
       return null;
     }
 
-    // Step 4: Transform and store
+    // ========================================================================
+    // STEP 3: Transform and store the fetched data
+    // ========================================================================
+
     const episodes = transformSeasonData(tmdbSeason);
     const cacheData: SeasonCache = {
       episodes,
