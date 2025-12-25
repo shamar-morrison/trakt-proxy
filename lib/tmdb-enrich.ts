@@ -276,6 +276,11 @@ export async function enrichEpisodeTracking(
           const date = new Date(watchedAt);
           if (!isNaN(date.getTime())) {
             watchedAt = Timestamp.fromDate(date);
+          } else {
+            console.warn(
+              `Invalid watchedAt date string for episode ${key}: "${episode.watchedAt}". Using current date.`,
+            );
+            watchedAt = Timestamp.now();
           }
         }
 
