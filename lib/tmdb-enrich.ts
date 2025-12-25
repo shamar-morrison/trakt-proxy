@@ -241,15 +241,22 @@ export async function enrichEpisodeTracking(
       const episode = episodes[key];
 
       // Skip if already fully enriched
-      if (episode.episodeId && episode.episodeName && episode.episodeAirDate) {
+      if (
+        episode.episodeId &&
+        episode.episodeName &&
+        episode.episodeAirDate &&
+        episode.episodeNumber &&
+        episode.seasonNumber &&
+        episode.tvShowId
+      ) {
         alreadyEnrichedCount++;
         continue;
       }
 
       const [, episodeStr] = key.split("_");
-      const episodeNumber = episodeStr;
+      const episodeNumber = parseInt(episodeStr, 10);
 
-      const cachedEpisode = seasonCache.episodes[episodeNumber];
+      const cachedEpisode = seasonCache.episodes[episodeNumber.toString()];
 
       if (cachedEpisode) {
         // Preserve watched and watchedAt, add enriched fields
@@ -258,6 +265,9 @@ export async function enrichEpisodeTracking(
           episodeId: cachedEpisode.episodeId,
           episodeName: cachedEpisode.episodeName,
           episodeAirDate: cachedEpisode.episodeAirDate,
+          episodeNumber: episodeNumber,
+          seasonNumber: seasonNumber,
+          tvShowId: showId,
           // Note: posterPath is not stored in cache (per requirements)
         };
         enrichedCount++;
