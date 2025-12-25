@@ -9,8 +9,7 @@
 
 import { Timestamp } from "firebase-admin/firestore";
 import { db } from "@/lib/firebase-admin";
-
-const TMDB_API_BASE = "https://api.themoviedb.org/3";
+import { TMDB_API_BASE } from "@/utils/constants";
 
 // TTL constants
 const DEFAULT_TTL_DAYS = 30;

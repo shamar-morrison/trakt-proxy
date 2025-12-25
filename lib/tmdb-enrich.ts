@@ -4,8 +4,7 @@
  */
 
 import { getSeasonFromCacheOrTMDB } from "@/lib/tmdb-cache";
-
-const TMDB_API_BASE = "https://api.themoviedb.org/3";
+import { TMDB_API_BASE } from "@/utils/constants";
 
 interface TMDBMovie {
   id: number;
