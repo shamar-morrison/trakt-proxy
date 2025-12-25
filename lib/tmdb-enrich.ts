@@ -3,6 +3,8 @@
  * Fetches missing metadata like posters, ratings, genres
  */
 
+import { getSeasonFromCacheOrTMDB } from "@/lib/tmdb-cache";
+
 const TMDB_API_BASE = "https://api.themoviedb.org/3";
 
 interface TMDBMovie {
@@ -200,9 +202,6 @@ export async function enrichEpisodeTracking(
   showId: number,
   episodes: Record<string, any>,
 ): Promise<Record<string, any>> {
-  // Import dynamically to avoid circular dependencies
-  const { getSeasonFromCacheOrTMDB } = await import("@/lib/tmdb-cache");
-
   const enrichedEpisodes: Record<string, any> = { ...episodes };
   const episodeKeys = Object.keys(episodes);
 

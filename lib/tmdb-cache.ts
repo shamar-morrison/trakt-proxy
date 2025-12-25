@@ -335,6 +335,13 @@ export async function getSeasonFromCacheOrTMDB(
     // ========================================================================
     // STEP 3: Transform and store the fetched data
     // ========================================================================
+    // OVERWRITE BEHAVIOR: We explicitly use merge: false (full overwrite) here.
+    // This is safe and intentional because:
+    // 1. We have fresh, complete season data from TMDB
+    // 2. The new data should fully replace any stale/partial cached data
+    // 3. All SeasonCache fields (episodes, lastUpdated, status) are provided
+    // 4. There's no user-specific data in this cache - it's global TMDB data
+    // ========================================================================
 
     const episodes = transformSeasonData(tmdbSeason);
     const cacheData: SeasonCache = {
@@ -343,7 +350,7 @@ export async function getSeasonFromCacheOrTMDB(
       status: "complete",
     };
 
-    await seasonRef.set(cacheData);
+    await seasonRef.set(cacheData, { merge: false });
 
     console.log(
       `Cached season ${seasonNumber} for show ${tmdbShowId} with ${Object.keys(episodes).length} episodes`,
