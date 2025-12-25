@@ -16,6 +16,7 @@ const TMDB_API_BASE = "https://api.themoviedb.org/3";
 const DEFAULT_TTL_DAYS = 30;
 const ONGOING_TTL_DAYS = 7;
 const RECENT_AIR_DATE_DAYS = 14; // Consider season "ongoing" if latest episode aired within this window
+const ERROR_TTL_MINUTES = 5; // Wait before retrying after a fetch error
 
 // ============================================================================
 // Types
@@ -30,7 +31,7 @@ export interface SeasonCacheEpisode {
 export interface SeasonCache {
   episodes: Record<string, SeasonCacheEpisode>;
   lastUpdated: Timestamp;
-  status: "complete" | "populating";
+  status: "complete" | "populating" | "error";
 }
 
 interface TMDBSeasonResponse {
@@ -162,15 +163,6 @@ export async function getSeasonFromCacheOrTMDB(
   tmdbShowId: number,
   seasonNumber: number,
 ): Promise<SeasonCache | null> {
-  const cacheRef = db
-    .collection("tmdb_cache")
-    .doc("shows")
-    .collection(tmdbShowId.toString())
-    .doc("seasons")
-    .collection(seasonNumber.toString())
-    .doc("data");
-
-  // Alternative structure using subcollections properly:
   const seasonRef = db.doc(
     `tmdb_cache/shows/${tmdbShowId}/seasons/${seasonNumber}`,
   );
@@ -188,6 +180,23 @@ export async function getSeasonFromCacheOrTMDB(
           `Season ${seasonNumber} for show ${tmdbShowId} is being populated, skipping`,
         );
         return null;
+      }
+
+      // If in error state, check if we should retry
+      if (cacheData.status === "error") {
+        const errorAgeMs = Date.now() - cacheData.lastUpdated.toMillis();
+        const errorTtlMs = ERROR_TTL_MINUTES * 60 * 1000;
+
+        if (errorAgeMs < errorTtlMs) {
+          console.log(
+            `Season ${seasonNumber} for show ${tmdbShowId} recently errored, skipping for ${Math.ceil((errorTtlMs - errorAgeMs) / 1000)}s`,
+          );
+          return null;
+        }
+        // Error TTL expired, allow retry
+        console.log(
+          `Error TTL expired for show ${tmdbShowId} season ${seasonNumber}, retrying`,
+        );
       }
 
       // If cache is fresh, return it
@@ -219,8 +228,18 @@ export async function getSeasonFromCacheOrTMDB(
     const tmdbSeason = await fetchSeasonFromTMDB(tmdbShowId, seasonNumber);
 
     if (!tmdbSeason) {
-      // Clean up the populating status on failure
-      await seasonRef.delete();
+      // Set error status instead of deleting - prevents concurrent retry storms
+      await seasonRef.set(
+        {
+          status: "error",
+          lastUpdated: Timestamp.now(),
+          episodes: {}, // Clear any partial data
+        },
+        { merge: false },
+      );
+      console.log(
+        `Marked season ${seasonNumber} for show ${tmdbShowId} as error, will retry after ${ERROR_TTL_MINUTES} minutes`,
+      );
       return null;
     }
 
