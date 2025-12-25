@@ -138,6 +138,14 @@ async function fetchSeasonFromTMDB(
   tmdbShowId: number,
   seasonNumber: number,
 ): Promise<TMDBSeasonResponse | null> {
+  // Defensive check: ensure TMDB API key is configured
+  if (!process.env.TMDB_API_KEY) {
+    console.error(
+      `Missing TMDB API key - cannot fetch season ${seasonNumber} for show ${tmdbShowId}`,
+    );
+    return null;
+  }
+
   try {
     const response = await fetch(
       `${TMDB_API_BASE}/tv/${tmdbShowId}/season/${seasonNumber}?api_key=${process.env.TMDB_API_KEY}`,
