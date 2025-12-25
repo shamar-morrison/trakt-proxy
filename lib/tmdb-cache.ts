@@ -4,7 +4,7 @@
  * Provides a global cache for TMDB season data to reduce API calls
  * and share data across all users during episode enrichment.
  *
- * Cache location: tmdb_cache/shows/{tmdbShowId}/seasons/{seasonNumber}
+ * Cache location: tmdb_cache/{tmdbShowId}/seasons/{seasonNumber}
  */
 
 import { Timestamp } from "firebase-admin/firestore";
@@ -214,9 +214,7 @@ export async function getSeasonFromCacheOrTMDB(
   tmdbShowId: number,
   seasonNumber: number,
 ): Promise<SeasonCache | null> {
-  const seasonRef = db.doc(
-    `tmdb_cache/shows/${tmdbShowId}/seasons/${seasonNumber}`,
-  );
+  const seasonRef = db.doc(`tmdb_cache/${tmdbShowId}/seasons/${seasonNumber}`);
 
   try {
     // ========================================================================
