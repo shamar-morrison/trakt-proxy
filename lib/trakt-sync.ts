@@ -408,14 +408,14 @@ async function syncCustomLists(
       await docRef.set({
         name: traktList.name,
         description: traktList.description || "",
-        createdAt: Timestamp.fromDate(new Date(traktList.created_at)),
-        updatedAt: Timestamp.fromDate(new Date(traktList.updated_at)),
+        createdAt: new Date(traktList.created_at).getTime(),
+        updatedAt: new Date(traktList.updated_at).getTime(),
         items: enrichedItems,
         traktId: traktList.ids.trakt,
         privacy: traktList.privacy === "public" ? "public" : "private",
         isCustom: true, // Mark as custom list from Trakt
         metadata: {
-          lastUpdated: Timestamp.now(),
+          lastUpdated: Date.now(),
           itemCount: Object.keys(enrichedItems).length,
         },
       });
