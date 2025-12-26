@@ -6,15 +6,15 @@ import {
   TraktListItem,
   TraktWatchlistItem,
   TraktFavorite,
-} from '@/utils/types/trakt';
+} from "@/utils/types/trakt";
 
-const TRAKT_API_BASE = 'https://api.trakt.tv';
-const TRAKT_API_VERSION = '2';
+const TRAKT_API_BASE = "https://api.trakt.tv";
+const TRAKT_API_VERSION = "2";
 
 interface TraktRequestOptions {
   accessToken: string;
   endpoint: string;
-  method?: 'GET' | 'POST';
+  method?: "GET" | "POST";
   body?: any;
 }
 
@@ -24,18 +24,18 @@ interface TraktRequestOptions {
 export async function traktRequest<T>({
   accessToken,
   endpoint,
-  method = 'GET',
+  method = "GET",
   body,
 }: TraktRequestOptions): Promise<T> {
   const url = `${TRAKT_API_BASE}${endpoint}`;
-  
+
   const response = await fetch(url, {
     method,
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${accessToken}`,
-      'trakt-api-version': TRAKT_API_VERSION,
-      'trakt-api-key': process.env.TRAKT_CLIENT_ID!,
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "trakt-api-version": TRAKT_API_VERSION,
+      "trakt-api-key": process.env.TRAKT_CLIENT_ID!,
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -43,7 +43,7 @@ export async function traktRequest<T>({
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `Trakt API error: ${response.status} ${response.statusText} - ${errorText}`
+      `Trakt API error: ${response.status} ${response.statusText} - ${errorText}`,
     );
   }
 
@@ -54,11 +54,11 @@ export async function traktRequest<T>({
  * Get all watched movies
  */
 export async function getWatchedMovies(
-  accessToken: string
+  accessToken: string,
 ): Promise<TraktWatchedMovie[]> {
   return traktRequest({
     accessToken,
-    endpoint: '/sync/watched/movies',
+    endpoint: "/sync/watched/movies",
   });
 }
 
@@ -66,11 +66,11 @@ export async function getWatchedMovies(
  * Get all watched TV shows with episode details
  */
 export async function getWatchedShows(
-  accessToken: string
+  accessToken: string,
 ): Promise<TraktWatchedShow[]> {
   return traktRequest({
     accessToken,
-    endpoint: '/sync/watched/shows?extended=full',
+    endpoint: "/sync/watched/shows?extended=full",
   });
 }
 
@@ -80,7 +80,7 @@ export async function getWatchedShows(
 export async function getRatings(accessToken: string): Promise<TraktRating[]> {
   return traktRequest({
     accessToken,
-    endpoint: '/sync/ratings',
+    endpoint: "/sync/ratings",
   });
 }
 
@@ -89,7 +89,7 @@ export async function getRatings(accessToken: string): Promise<TraktRating[]> {
  */
 export async function getUserLists(
   accessToken: string,
-  username: string
+  username: string,
 ): Promise<TraktList[]> {
   return traktRequest({
     accessToken,
@@ -103,7 +103,7 @@ export async function getUserLists(
 export async function getListItems(
   accessToken: string,
   username: string,
-  listId: string
+  listId: string,
 ): Promise<TraktListItem[]> {
   return traktRequest({
     accessToken,
@@ -115,11 +115,11 @@ export async function getListItems(
  * Get user's watchlist
  */
 export async function getWatchlist(
-  accessToken: string
+  accessToken: string,
 ): Promise<TraktWatchlistItem[]> {
   return traktRequest({
     accessToken,
-    endpoint: '/sync/watchlist',
+    endpoint: "/sync/watchlist",
   });
 }
 
@@ -127,11 +127,11 @@ export async function getWatchlist(
  * Get user's favorites
  */
 export async function getFavorites(
-  accessToken: string
+  accessToken: string,
 ): Promise<TraktFavorite[]> {
   return traktRequest({
     accessToken,
-    endpoint: '/sync/favorites',
+    endpoint: "/sync/favorites",
   });
 }
 
@@ -146,10 +146,22 @@ export async function getUserProfile(accessToken: string): Promise<{
   vip_ep: boolean;
   ids: { slug: string };
 }> {
-  return traktRequest({
+  // The /users/settings endpoint returns { user: {...}, account: {...}, connections: {...} }
+  const response = await traktRequest<{
+    user: {
+      username: string;
+      private: boolean;
+      name: string;
+      vip: boolean;
+      vip_ep: boolean;
+      ids: { slug: string };
+    };
+  }>({
     accessToken,
-    endpoint: '/users/settings',
+    endpoint: "/users/settings",
   });
+
+  return response.user;
 }
 
 /**
@@ -162,21 +174,21 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
   created_at: number;
 }> {
   const response = await fetch(`${TRAKT_API_BASE}/oauth/token`, {
-    method: 'POST',
+    method: "POST",
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       refresh_token: refreshToken,
       client_id: process.env.TRAKT_CLIENT_ID,
       client_secret: process.env.TRAKT_CLIENT_SECRET,
       redirect_uri: process.env.TRAKT_REDIRECT_URI,
-      grant_type: 'refresh_token',
+      grant_type: "refresh_token",
     }),
   });
 
   if (!response.ok) {
-    throw new Error('Failed to refresh Trakt access token');
+    throw new Error("Failed to refresh Trakt access token");
   }
 
   return response.json();
