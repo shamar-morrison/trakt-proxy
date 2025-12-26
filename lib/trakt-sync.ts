@@ -19,7 +19,8 @@ import {
   transformWatchlistItem,
   transformFavorite,
 } from "@/lib/logic/transform";
-import { FirestoreList, TraktSyncStatus } from "@/utils/types/trakt";
+import { enrichMediaItems } from "@/lib/tmdb-enrich";
+import { TraktSyncStatus } from "@/utils/types/trakt";
 
 interface SyncResult {
   success: boolean;
@@ -375,31 +376,54 @@ async function syncCustomLists(
         traktList.ids.slug,
       );
 
-      // Transform list items
-      const items = listItems
-        .map(transformListItem)
-        .filter((item) => item !== null);
+      // Transform list items to format compatible with enrichment
+      // Use Record<string, any> keyed by TMDB ID (matching other lists like already-watched)
+      const items: Record<string, any> = {};
 
-      // Create Firestore list document
-      const firestoreList: FirestoreList = {
-        name: traktList.name,
-        description: traktList.description || "",
-        createdAt: Timestamp.fromDate(new Date(traktList.created_at)),
-        updatedAt: Timestamp.fromDate(new Date(traktList.updated_at)),
-        items: items as any[],
-        traktId: traktList.ids.trakt,
-        privacy: traktList.privacy === "public" ? "public" : "private",
-      };
+      for (const traktItem of listItems) {
+        const transformed = transformListItem(traktItem);
+        if (transformed) {
+          // Convert to format expected by enrichMediaItem and frontend
+          // Key by TMDB ID for consistency with other lists
+          items[transformed.tmdbId.toString()] = {
+            id: transformed.tmdbId,
+            media_type: transformed.mediaType,
+            title: transformed.title,
+            addedAt: transformed.addedAt,
+            traktId: transformed.traktId,
+          };
+        }
+      }
 
-      // Save to Firestore
+      // Enrich items with TMDB data (poster_path, genre_ids, vote_average, release_date)
+      const enrichedItems = await enrichMediaItems(items);
+
+      // Save to Firestore with consistent structure
       const docRef = db
         .collection("users")
         .doc(userId)
         .collection("lists")
         .doc(`trakt_${traktList.ids.trakt}`);
 
-      await docRef.set(firestoreList);
+      await docRef.set({
+        name: traktList.name,
+        description: traktList.description || "",
+        createdAt: Timestamp.fromDate(new Date(traktList.created_at)),
+        updatedAt: Timestamp.fromDate(new Date(traktList.updated_at)),
+        items: enrichedItems,
+        traktId: traktList.ids.trakt,
+        privacy: traktList.privacy === "public" ? "public" : "private",
+        isCustom: true, // Mark as custom list from Trakt
+        metadata: {
+          lastUpdated: Timestamp.now(),
+          itemCount: Object.keys(enrichedItems).length,
+        },
+      });
+
       count++;
+      console.log(
+        `Synced custom list "${traktList.name}" with ${Object.keys(enrichedItems).length} items`,
+      );
     } catch (error) {
       console.error(`Failed to sync list "${traktList.name}":`, error);
     }
