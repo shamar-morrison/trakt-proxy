@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase-admin";
 import { syncTraktData } from "@/lib/trakt-sync";
-import { refreshAccessToken } from "@/lib/trakt-api";
+import { refreshAccessToken, TraktOAuthError } from "@/lib/trakt-api";
 import { Timestamp } from "firebase-admin/firestore";
 
 // Force dynamic rendering - GET handler uses request.nextUrl.searchParams
@@ -70,6 +70,24 @@ export async function POST(request: NextRequest) {
           traktTokenExpiresAt: expiresAt,
         });
       } catch (error) {
+        if (error instanceof TraktOAuthError) {
+          console.error("Failed to refresh Trakt token:", {
+            reason: error.reason,
+            status: error.status,
+            cfRay: error.cfRay,
+            upstreamError: error.upstreamError,
+            snippet: error.snippet,
+          });
+
+          return NextResponse.json(
+            {
+              error: "Failed to refresh Trakt token",
+              reason: error.reason,
+            },
+            { status: 401 },
+          );
+        }
+
         console.error("Failed to refresh Trakt token:", error);
         return NextResponse.json(
           { error: "Failed to refresh Trakt token" },

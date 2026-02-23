@@ -1,9 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/firebase-admin";
 import { Timestamp } from "firebase-admin/firestore";
+import {
+  exchangeAuthorizationCode,
+  TraktOAuthError,
+  TraktOAuthFailureReason,
+} from "@/lib/trakt-api";
 
 // Force dynamic rendering - this route uses request.nextUrl.searchParams
 export const dynamic = "force-dynamic";
+
+function getAppBaseUrl(request: NextRequest): string {
+  return process.env.NEXT_PUBLIC_APP_URL || request.nextUrl.origin;
+}
+
+function buildErrorUrl(
+  request: NextRequest,
+  error: string,
+  reason: TraktOAuthFailureReason,
+  ray?: string,
+): URL {
+  const url = new URL("/trakt/error", getAppBaseUrl(request));
+  url.searchParams.set("error", error);
+  url.searchParams.set("reason", reason);
+
+  if (ray) {
+    url.searchParams.set("ray", ray);
+  }
+
+  return url;
+}
 
 /**
  * GET /api/trakt/callback
@@ -20,44 +46,21 @@ export async function GET(request: NextRequest) {
     if (error) {
       console.error("Trakt OAuth error:", error);
       return NextResponse.redirect(
-        `${process.env.NEXT_PUBLIC_APP_URL}/trakt/error?error=${error}`,
+        buildErrorUrl(request, error, "invalid_oauth"),
       );
     }
 
     // Validate parameters
     if (!code || !state) {
-      return NextResponse.json(
-        { error: "Missing code or state parameter" },
-        { status: 400 },
+      return NextResponse.redirect(
+        buildErrorUrl(request, "missing_code_or_state", "invalid_oauth"),
       );
     }
 
     const userId = state;
 
     // Exchange authorization code for access token
-    const tokenResponse = await fetch("https://api.trakt.tv/oauth/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        code,
-        client_id: process.env.TRAKT_CLIENT_ID,
-        client_secret: process.env.TRAKT_CLIENT_SECRET,
-        redirect_uri: process.env.TRAKT_REDIRECT_URI,
-        grant_type: "authorization_code",
-      }),
-    });
-
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error("Failed to exchange code for token:", errorText);
-      return NextResponse.redirect(
-        `${process.env.NEXT_PUBLIC_APP_URL}/trakt/error?error=token_exchange_failed`,
-      );
-    }
-
-    const tokenData = await tokenResponse.json();
+    const tokenData = await exchangeAuthorizationCode(code);
     const { access_token, refresh_token, expires_in, created_at } = tokenData;
 
     // Calculate expiration timestamp
@@ -77,14 +80,32 @@ export async function GET(request: NextRequest) {
 
     // Redirect back to app with success
     // The app will handle the deep link and trigger initial sync
-    return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/trakt/success?userId=${userId}`,
-    );
+    const successUrl = new URL("/trakt/success", getAppBaseUrl(request));
+    successUrl.searchParams.set("userId", userId);
+    return NextResponse.redirect(successUrl);
   } catch (error) {
+    if (error instanceof TraktOAuthError) {
+      console.error("Failed to exchange code for token:", {
+        reason: error.reason,
+        status: error.status,
+        cfRay: error.cfRay,
+        upstreamError: error.upstreamError,
+        snippet: error.snippet,
+      });
+
+      return NextResponse.redirect(
+        buildErrorUrl(
+          request,
+          "token_exchange_failed",
+          error.reason,
+          error.cfRay,
+        ),
+      );
+    }
+
     console.error("Error in Trakt OAuth callback:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
+    return NextResponse.redirect(
+      buildErrorUrl(request, "token_exchange_failed", "upstream_unavailable"),
     );
   }
 }
